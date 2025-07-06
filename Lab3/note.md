@@ -20,7 +20,7 @@
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
 kinit(): 初始化锁(`initlock`)和空闲页链表(`freerange`)
-
+### **内核空间初始化**
 ### kvminit 逻辑
 创建并初始化一个只映射内核空间”的页表，用于内核在启用分页机制（satp）后能继续正常运行
 
@@ -148,4 +148,131 @@ xv6中对RISC-V平台级别中断控制器（platform-level interrupt controller
 
 **plicinit告诉中断控制器，串口和虚拟磁盘这两个设备可以产生中断；plicinithart将CPU设置为只接受串口和磁盘的中断信号**
 ### 文件系统
-## vm.c
+    void
+    binit(void)
+    {
+        struct buf *b;
+
+        initlock(&bcache.lock, "bcache");
+
+        // Create linked list of buffers
+        bcache.head.prev = &bcache.head;
+        bcache.head.next = &bcache.head;
+        for(b = bcache.buf; b < bcache.buf+NBUF; b++){
+            b->next = bcache.head.next;
+            b->prev = &bcache.head;
+            initsleeplock(&b->lock, "buffer");
+            bcache.head.next->prev = b;
+            bcache.head.next = b;
+        }
+    }
+初始化磁盘缓冲区的函数，准备了一个全局磁盘块缓存机制buf[NBUF]，构建了LRU链表（双向链表），为全局缓存和每个缓冲区初始化锁
+
+    struct {
+        struct spinlock lock;
+        struct inode inode[NINODE];
+    } icache;
+    void
+    iinit()
+    {
+        int i = 0;
+        initlock(&icache.lock, "icache");
+        for(i = 0; i < NINODE; i++) {
+            initsleeplock(&icache.inode[i].lock, "inode");
+        }
+    }
+为整个inode缓存系统初始化一个全局自旋锁，以保护对inode缓存结构的并发访问。其次初始化每个inode的睡眠锁
+
+    struct {
+        struct spinlock lock;
+        struct file file[NFILE];
+    } ftable;
+
+    void
+    fileinit(void)
+    {
+        initlock(&ftable.lock, "ftable");
+    }
+ftable是xv6中全局文件表的数据结构，里面包含一个固定大小的文件结构体数组，作为系统中所有打开文件的中央存储池，通过索引管理所有进程打开的文件实例。
+
+fileinit函数逻辑只是初始化ftable的自旋锁
+### **设置第一个用户进程**
+    // Set up first user process.
+    void
+    userinit(void)
+    {
+        struct proc *p;
+
+        // 分配进程结构体
+        p = allocproc();
+        initproc = p;
+        
+        // allocate one user page and copy init's instructions
+        // and data into it.
+        // 初始化用户地址空间
+        // uvminit将i你听从的拷贝到用户内存的第一页，init是编译时嵌入的汇编程序
+        uvminit(p->pagetable, initcode, sizeof(initcode));
+        p->sz = PGSIZE;
+
+        // prepare for the very first "return" from kernel to user.
+        p->trapframe->epc = 0;      // user program counter
+        p->trapframe->sp = PGSIZE;  // user stack pointer
+
+        safestrcpy(p->name, "initcode", sizeof(p->name));
+        p->cwd = namei("/");
+
+        p->state = RUNNABLE;
+
+        release(&p->lock);
+    }
+xv6创建第一个用户进程，是内核态过渡到用户态的关键步骤，后续执行流程是当调度器首次选择该进程运行时：
+1. 通过`usertrapret`切换到用户态
+2. 从`epc=0`开始执行initcode中的指令
+3. `initcode`调用`exec("/init")`加载真正的用户程序
+4. 系统进入正常的用户态运行环境
+**`init`是用户态的第一个程序**
+之所以创建这个进程是为了要启动用户环境，内核自身无法直接运行用户程序，因此**需要一个种子进程作为所有用户进程的祖先**，后续所有进程都通过`fork()`从这个进程进行派生。创建的这个进程就是**1号进程**
+### 调度器逻辑
+    void scheduler(void)
+    {
+        struct proc *p;
+        struct cpu *c = mycpu();
+        
+        c->proc = 0;
+        for(;;){
+            // Avoid deadlock by ensuring that devices can interrupt.
+            intr_on();
+            
+            int found = 0;
+            for(p = proc; p < &proc[NPROC]; p++) {
+                acquire(&p->lock);
+                if(p->state == RUNNABLE) {
+                    // Switch to chosen process.  It is the process's job
+                    // to release its lock and then reacquire it
+                    // before jumping back to us.
+                    p->state = RUNNING;
+                    c->proc = p;
+                    swtch(&c->context, &p->context);
+
+                    // Process is done running for now.
+                    // It should have changed its p->state before coming back.
+                    c->proc = 0;
+
+                    found = 1;
+                }
+                release(&p->lock);
+            }
+    #if !defined (LAB_FS)
+            if(found == 0) {
+            intr_on();
+            asm volatile("wfi");
+            }
+    #else
+            ;
+    #endif
+        }
+    }
+这个是xv6的核心调度函数，运行在每个CPU核心上，负责选择并切换运行用户进程。调度器的内部是一个**无限循环**。
+1. 调度器扫描进程寻找RUNNABLE的进程，通过swtch进行上下文切换
+2. c->proc记录当前CPU运行的进程，切换回来后清零表示返回到调度器
+3. 如果`found == 0`表示无进程可以运行，那么开启中断(`intr_on()`)，执行wfi
