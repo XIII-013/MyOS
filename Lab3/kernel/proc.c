@@ -21,6 +21,9 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+
+extern char etext[];  // kernel.ld sets this to end of kernel code.
+
 // initialize the proc table at boot time.
 void
 procinit(void)
@@ -34,12 +37,12 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
   kvminithart();
 }
@@ -121,6 +124,17 @@ found:
     return 0;
   }
 
+  p->kpagetable = kvminit_newpagetable();
+  
+  
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc stack");
+  else printf("kstack success\n");
+  uint64 va = KSTACK((int)0);
+  kvmmap(p->kpagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -149,6 +163,16 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+
+  // 释放进程的内核栈
+  void* kstack = (void*)kvmpa(p->kpagetable, p->kstack);
+  kfree(kstack);
+  p->kstack = 0;
+
+  // 释放内核页表，不释放物理，只释放映射
+  proc_freekpagetable(p->kpagetable);
+  p->kpagetable = 0;
+
   p->state = UNUSED;
 }
 
@@ -195,6 +219,20 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+void
+proc_freekpagetable(pagetable_t kpagetable)
+{
+  for(int i = 0;i < 512;i++) {
+    pte_t pte = kpagetable[i];
+    uint64 child = PTE2PA(pte);
+    if((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) { // 如果不是叶子（如果指向物理页，pte这三位至少有一位设置为1）
+      proc_freekpagetable((pagetable_t)child);
+      kpagetable[i] = 0;
+    }
+  }
+  kfree((void*)kpagetable);
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -215,7 +253,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
@@ -463,7 +501,6 @@ scheduler(void)
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
@@ -473,11 +510,17 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();
         c->proc = 0;
+        
 
         found = 1;
       }
@@ -485,6 +528,7 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
+      // kvminithart();
       intr_on();
       asm volatile("wfi");
     }
