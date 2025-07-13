@@ -132,3 +132,15 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace() {
+  uint64 fp = r_fp();
+  printf("backtrace:\n");
+
+  // 若相等则说明fp是页边界，显然不是栈帧
+  while(PGROUNDDOWN(fp) != PGROUNDUP(fp)) {
+    uint64 ra = *(uint64*)(fp - 8);
+    printf("%p\n", ra);
+    fp = *(uint64*)(fp - 16);
+  }
+}

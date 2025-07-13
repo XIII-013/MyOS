@@ -639,6 +639,7 @@ kill(int pid)
   return -1;
 }
 
+
 // Copy to either a user address, or kernel address,
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
@@ -696,4 +697,13 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+int sigalarm(int ticks, void (*handler)()) {
+  return 0;
+}
+
+int sigreturn(void) {
+  return 0;
 }

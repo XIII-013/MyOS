@@ -62,6 +62,7 @@ sys_sleep(void)
     return -1;
   acquire(&tickslock);
   ticks0 = ticks;
+  backtrace();
   while(ticks - ticks0 < n){
     if(myproc()->killed){
       release(&tickslock);
@@ -70,6 +71,20 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  return 0;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  printf("(XIII) exec sys_sigalarm\n");
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  printf("(XIII) exec sys_sigreturn\n");
   return 0;
 }
 
