@@ -127,6 +127,15 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->intervel = 0;
+  p->handler = 0;
+  p->tick = 0;
+  if((p->trapframe_copy = (struct trapframe *)kalloc()) == 0){
+    release(&p->lock);
+    return 0;
+  }
+  p->alarm_lock = 0;
+
   return p;
 }
 
@@ -149,6 +158,14 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+
+  p->intervel = 0;
+  p->handler = 0;
+  p->tick = 0;
+  if(p->trapframe_copy)
+    kfree((void*)p->trapframe_copy);
+  p->alarm_lock = 0;
+
   p->state = UNUSED;
 }
 
@@ -701,9 +718,17 @@ procdump(void)
 
 
 int sigalarm(int ticks, void (*handler)()) {
+  struct proc *p = myproc();
+  p->tick = 0;
+  p->intervel = ticks;
+  p->handler = handler;
+  // printf("(XIII) exec sigalarm handler: %p, p->handler: %p\n", (void*)handler, (void*)p->handler);
   return 0;
 }
 
 int sigreturn(void) {
+  struct proc *p = myproc();
+  p->alarm_lock = 0;
+  *(p->trapframe) = *(p->trapframe_copy);
   return 0;
 }

@@ -66,7 +66,17 @@ usertrap(void)
 
     syscall();
   } else if((which_dev = devintr()) != 0){
-    // ok
+    // alarm logic
+    if(which_dev == 2) {
+      p->tick++;
+      if(p->tick >= p->intervel && p->intervel != 0 && p->alarm_lock == 0) {
+        p->tick = 0;
+        p->alarm_lock = 1;
+        *(p->trapframe_copy) = *(p->trapframe);
+        p->trapframe->epc = (uint64)p->handler;
+      }
+      yield();
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -76,9 +86,6 @@ usertrap(void)
   if(p->killed)
     exit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
 
   usertrapret();
 }

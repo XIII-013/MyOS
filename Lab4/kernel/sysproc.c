@@ -77,15 +77,19 @@ sys_sleep(void)
 uint64
 sys_sigalarm(void)
 {
-  printf("(XIII) exec sys_sigalarm\n");
-  return 0;
+  // printf("(XIII) exec sys_sigalarm\n");
+  int ticks;
+  uint64 handler;
+  if(argint(0, &ticks) < 0) return -1;
+  if(argaddr(1, &handler) < 0) return -1;
+  return sigalarm(ticks, (void (*)())handler);
 }
 
 uint64
 sys_sigreturn(void)
 {
-  printf("(XIII) exec sys_sigreturn\n");
-  return 0;
+  // printf("(XIII) exec sys_sigreturn\n");
+  return sigreturn();
 }
 
 uint64
