@@ -65,20 +65,21 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if(r_scause() == 15) {
+  } else if(r_scause() == 15 || r_scause() == 13) {
     // allocate new page
     uint64 va = r_stval();
-    printf("wrong allocate address:%p\n", va);
+    // printf("wrong allocate address:%p\n", va);
     struct proc *p = myproc();
-    va = PGROUNDDOWN(va);
-    char *mem;
-    mem = kalloc();
-    if(mem == 0) exit(-1);
-    memset(mem, 0, PGSIZE);
-    if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
-      kfree(mem);
+
+    // 判断虚拟地址合法性
+    if(va >= p->sz) {
+      p->killed = 1;
       exit(-1);
     }
+
+    // va = PGROUNDDOWN(va);
+    lazyAllocate(va);
+    
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
