@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -146,7 +148,7 @@ kvmpa(uint64 va)
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
 int
-mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
+mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm) // size指的是页数
 {
   uint64 a, last;
   pte_t *pte;
@@ -311,7 +313,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,14 +320,12 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    if(*pte & PTE_W) 
+      *pte = (*pte & ~PTE_W) | PTE_COW; 
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0)
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
-    }
+    increaRef((void*)pa);
   }
   return 0;
 
@@ -357,6 +356,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   uint64 n, va0, pa0;
 
   while(len > 0){
+
+    // 检查每一页是否是COW页
+    if(checkCOW(dstva))
+      uvmCOWcopy(dstva);
+
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
@@ -439,4 +443,29 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int checkCOW(uint64 va) {
+  struct proc *p = myproc();
+  pte_t *pte;
+  pte = walk(p->pagetable, va, 0);
+  return va < p->sz && pte != 0 && (*pte & PTE_V) && (*pte & PTE_COW);
+}
+
+int uvmCOWcopy(uint64 va) {
+  struct proc *p = myproc();
+  pte_t *pte;
+  pte = walk(p->pagetable, va, 0);
+  if(pte == 0) 
+    panic("(XIII) uvmCOWcopy: walk");
+  uint64 pa = PTE2PA(*pte);
+  uint64 new = (uint64)COWnew((void*)pa);
+  if(new == 0) 
+    return -1;
+  uint64 flags = PTE_FLAGS(*pte);
+  flags = (flags | PTE_W) & ~PTE_COW;
+  uvmunmap(p->pagetable, PGROUNDDOWN(va), 1, 0);
+  if(mappages(p->pagetable, va, 1, new, flags) == -1) 
+    panic("(XIII) uvmCOWcopy: mappages");
+  return 0;
 }

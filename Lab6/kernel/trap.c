@@ -65,6 +65,12 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if((r_scause() == 13 || r_scause() == 15) && checkCOW(r_stval())) {
+    // 执行写时复制逻辑
+    if(uvmCOWcopy(r_stval()) == -1) {
+      p->killed = 1;
+      exit(-1);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
