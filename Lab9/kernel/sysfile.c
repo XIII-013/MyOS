@@ -484,3 +484,23 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+uint64
+sys_symlink(void) {
+
+  char name[DIRSIZ], path[MAXPATH], target[MAXPATH];
+  struct inode *dp, *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0) {
+    end_op();
+    return -1;
+  }
+  
+  return 0;
+}
